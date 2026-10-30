@@ -1,182 +1,242 @@
 <?php
-require_once 'config.php';
-require_login();
+require_once 'inc/functions.php';
+include 'inc/header.php';
 
-$msg = '';
-$err = '';
-
-// ================= UPLOAD IMAGE =================
-if (isset($_POST['action']) && $_POST['action'] === 'upload') {
-
-    // NULL SAFE product_id
-    $product_id = !empty($_POST['product_id']) ? intval($_POST['product_id']) : NULL;
-    $caption = trim($_POST['caption'] ?? '');
-
-    if (!empty($_FILES['image']['name'])) {
-
-        $upDir = __DIR__ . '/uploads/gallery/';
-        if (!is_dir($upDir)) {
-            mkdir($upDir, 0755, true);
-        }
-
-        $allowed = ['jpg','jpeg','png','webp', 'mp4', 'webm', 'ogg'];
-        $ext = strtolower(pathinfo($_FILES['image']['name'], PATHINFO_EXTENSION));
-
-        if (!in_array($ext, $allowed)) {
-            $err = 'Invalid file type. Only JPG, PNG, WEBP, MP4, WEBM, OGG allowed.';
-        } else {
-
-            $newName = uniqid('g_') . '.' . $ext;
-
-            if (move_uploaded_file($_FILES['image']['tmp_name'], $upDir . $newName)) {
-
-                $filename = 'uploads/gallery/' . $newName;
-
-                $stmt = $mysqli->prepare(
-                    "INSERT INTO gallery (product_id, filename, caption) VALUES (?, ?, ?)"
-                );
-
-                if ($product_id === NULL || $product_id === 0) {
-                    $pid_null = NULL;
-                    $stmt->bind_param('iss', $pid_null, $filename, $caption);
-                } else {
-                    $stmt->bind_param('iss', $product_id, $filename, $caption);
-                }
-
-                if ($stmt->execute()) {
-                    $msg = 'File uploaded successfully';
-                } else {
-                    $err = 'Database insert failed';
-                }
-
-                $stmt->close();
-
-            } else {
-                $err = 'Image upload failed';
-            }
-        }
-    } else {
-        $err = 'Please select an image';
+/* Fetch gallery images with product names */
+$imgs = [];
+if (isset($conn)) {
+    // LEFT JOIN with products table to get the product name
+    $res = $conn->query("
+        SELECT g.filename, g.caption, p.name AS product_name
+        FROM gallery g
+        LEFT JOIN products p ON g.product_id = p.id
+        ORDER BY g.id DESC
+    ");
+    if ($res) {
+        $imgs = $res->fetch_all(MYSQLI_ASSOC);
     }
 }
-
-// ================= DELETE IMAGE =================
-if (isset($_GET['delete'])) {
-
-    $id = intval($_GET['delete']);
-
-    $img = $mysqli->query(
-        "SELECT filename FROM gallery WHERE id = {$id}"
-    )->fetch_assoc();
-
-    if ($img && file_exists(__DIR__ . '/' . $img['filename'])) {
-        unlink(__DIR__ . '/' . $img['filename']);
-    }
-
-    $stmt = $mysqli->prepare("DELETE FROM gallery WHERE id = ?");
-    $stmt->bind_param('i', $id);
-    $stmt->execute();
-    $stmt->close();
-
-    header("Location: gallery.php");
-    exit;
-}
-
-// ================= DATA =================
-$products = $mysqli->query(
-    "SELECT id, name FROM products ORDER BY name"
-)->fetch_all(MYSQLI_ASSOC);
-
-$res = $mysqli->query("
-    SELECT g.*, p.name AS pname 
-    FROM gallery g 
-    LEFT JOIN products p ON g.product_id = p.id 
-    ORDER BY g.id DESC
-");
-
-include 'includes.php';
 ?>
 
-<div class="card">
-    <h2>📷 Manage Gallery</h2>
+<style>
+/* ===== PREMIUM GALLERY STYLE ===== */
+:root {
+    --choco-primary: #5d3a1a;
+    --choco-accent: #d2691e;
+    --choco-bg: #fffcf9;
+    --glass-bg: rgba(255, 255, 255, 0.8);
+}
 
-    <?php if ($msg): ?><div class="alert success"><?php echo e($msg); ?></div><?php endif; ?>
-    <?php if ($err): ?><div class="alert error"><?php echo e($err); ?></div><?php endif; ?>
+.gallery-section {
+    padding: 80px 0;
+    background-color: var(--choco-bg);
+}
 
-    <!-- UPLOAD FORM -->
-    <form method="post" enctype="multipart/form-data">
-        <input type="hidden" name="action" value="upload">
+.gallery-container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 0 40px;
+}
 
-        <div class="row">
-            <label>Attach to Product (optional)</label>
-            <select name="product_id">
-                <option value="">-- None --</option>
-                <?php foreach ($products as $p): ?>
-                    <option value="<?php echo e($p['id']); ?>">
-                        <?php echo e($p['name']); ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
+.gallery-header {
+    text-align: center;
+    margin-bottom: 60px;
+}
+
+.gallery-header h2 {
+    font-size: 3.5rem;
+    color: var(--choco-primary);
+    font-weight: 800;
+    background: linear-gradient(45deg, #5d3a1a, #bd6c2f);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 10px;
+}
+
+.gallery-header p {
+    font-size: 1.2rem;
+    color: #888;
+    max-width: 600px;
+    margin: 0 auto;
+}
+
+.gallery-grid {
+    column-count: 3;
+    column-gap: 30px;
+}
+
+@media (max-width: 1100px) {
+    .gallery-grid { column-count: 2; }
+}
+@media (max-width: 700px) {
+    .gallery-grid { column-count: 1; }
+}
+
+.gallery-item {
+    break-inside: avoid;
+    margin-bottom: 30px;
+    position: relative;
+    border-radius: 20px;
+    overflow: hidden;
+    background: #fff;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.05);
+    transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+    cursor: pointer;
+}
+
+.gallery-item:hover {
+    transform: translateY(-10px);
+    box-shadow: 0 20px 50px rgba(93, 58, 26, 0.15);
+}
+
+.gallery-media-wrapper {
+    width: 100%;
+    position: relative;
+    overflow: hidden;
+    background-color: #f5f5f5;
+}
+
+.gallery-media-wrapper img, 
+.gallery-media-wrapper video {
+    width: 100%;
+    display: block;
+    transition: transform 0.8s ease;
+}
+
+.gallery-item:hover .gallery-media-wrapper img,
+.gallery-item:hover .gallery-media-wrapper video {
+    transform: scale(1.08);
+}
+
+.video-icon {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    background: rgba(255, 255, 255, 0.9);
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 5;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+    font-size: 18px;
+}
+
+.gallery-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 30px 20px;
+    background: linear-gradient(to top, rgba(0,0,0,0.8), transparent);
+    color: #white;
+    opacity: 0;
+    transform: translateY(20px);
+    transition: all 0.4s ease;
+    z-index: 10;
+}
+
+.gallery-item:hover .gallery-overlay {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.gallery-item-title {
+    font-size: 1.25rem;
+    font-weight: 700;
+    margin-bottom: 5px;
+    color: #fff;
+}
+
+.gallery-item-desc {
+    font-size: 0.9rem;
+    color: rgba(255,255,255,0.8);
+    font-style: italic;
+}
+
+/* Modal/Lightbox logic would go here if needed, but for now just big display */
+
+.no-items {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 100px 0;
+    color: #aaa;
+    font-size: 1.5rem;
+}
+</style>
+
+<main class="gallery-section">
+    <div class="gallery-container">
+        <div class="gallery-header">
+            <h2>Our Chocolate Gallery</h2>
+            <p>A curated collection of our finest artisanal creations, captured in their most beautiful moments.</p>
         </div>
 
-        <div class="row">
-            <label>Image or Video</label>
-            <input type="file" name="image" accept="image/*,video/*" required>
-        </div>
+        <?php if (empty($imgs)): ?>
+            <div class="no-items">
+                <p>No masterpieces to show yet. Stay tuned!</p>
+            </div>
+        <?php else: ?>
 
-        <div class="row">
-            <label>Name / Caption (Required)</label>
-            <input type="text" name="caption" placeholder="Enter a unique name for this item" required>
-        </div>
+        <div class="gallery-grid">
 
-        <button class="btn" type="submit">Upload Image</button>
-    </form>
-
-    <!-- GALLERY TABLE -->
-    <table>
-        <thead>
-            <tr>
-                <th>ID</th>
-                <th>Preview</th>
-                <th>Product</th>
-                <th>Caption</th>
-                <th>Action</th>
-            </tr>
-        </thead>
-        <tbody>
-        <?php while ($r = $res->fetch_assoc()): ?>
-            <tr>
-                <td><?php echo e($r['id']); ?></td>
-                <td>
-                    <?php 
-                    $imgSrc = $r['filename'];
-                    if (!file_exists(__DIR__ . '/' . $r['filename']) && file_exists(__DIR__ . '/../' . $r['filename'])) {
-                        $imgSrc = '../' . $r['filename'];
+        <?php foreach ($imgs as $im): ?>
+            <?php
+                $filename = ltrim($im['filename'], '/');
+                $imgUrl   = $filename; 
+                if (defined('BASE_URL')) {
+                    // If path starts with uploads/, it's likely managed by admin
+                    if (strpos($filename, 'uploads/') === 0) {
+                        $imgUrl = BASE_URL . "choco_admin/" . $filename;
+                    } elseif (strpos($filename, 'choco_admin') === 0) {
+                        $imgUrl = "/" . $filename;
+                    } else {
+                        $imgUrl = BASE_URL . $filename;
                     }
-                    ?>
-                    <?php if ($r['filename']): ?>
-                        <?php 
-                        $is_video = in_array(strtolower(pathinfo($r['filename'], PATHINFO_EXTENSION)), ['mp4', 'webm', 'ogg']);
-                        ?>
-                        <?php if ($is_video): ?>
-                            <div style="width:60px; height:60px; background:#f0f0f0; display:flex; align-items:center; justify-content:center; border-radius:4px; font-size:24px;">🎥</div>
-                        <?php else: ?>
-                            <img src="<?php echo e($imgSrc); ?>" height="60" style="object-fit:cover; border-radius:4px;">
-                        <?php endif; ?>
-                    <?php endif; ?>
-                </td>
-                <td><?php echo e($r['pname'] ?? '—'); ?></td>
-                <td><?php echo e($r['caption']); ?></td>
-                <td>
-                    <a href="gallery_edit.php?id=<?php echo e($r['id']); ?>">Edit</a> |
-                    <a href="?delete=<?php echo e($r['id']); ?>"
-                       onclick="return confirm('Delete this image?')"
-                       class="del">Delete</a>
-                </td>
-            </tr>
-        <?php endwhile; ?>
-        </tbody>
-    </table>
-</div>
+                }
+                
+                $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+                $is_video = in_array($ext, ['mp4', 'webm', 'ogg']);
+                
+                $title = !empty($im['product_name']) ? $im['product_name'] : $im['caption'];
+                if (empty($title)) {
+                    $title = "Signature Delight #" . $im['id'];
+                }
+                $caption = (!empty($im['product_name']) && !empty($im['caption'])) ? $im['caption'] : "";
+            ?>
 
-<?php include 'footer.php'; ?>
+            <div class="gallery-item">
+                <?php if ($is_video): ?>
+                    <div class="video-icon">🎥</div>
+                <?php endif; ?>
+
+                <div class="gallery-media-wrapper">
+                    <?php if ($is_video): ?>
+                        <video loop muted playsinline onmouseover="this.play()" onmouseout="this.pause()">
+                            <source src="<?php echo htmlspecialchars($imgUrl); ?>" type="video/<?php echo $ext; ?>">
+                            Your browser does not support videos.
+                        </video>
+                    <?php else: ?>
+                        <img src="<?php echo htmlspecialchars($imgUrl); ?>" alt="<?php echo htmlspecialchars($title); ?>" loading="lazy">
+                    <?php endif; ?>
+                </div>
+
+                <div class="gallery-overlay">
+                    <div class="gallery-item-title"><?php echo htmlspecialchars($title); ?></div>
+                    <?php if ($caption): ?>
+                        <div class="gallery-item-desc"><?php echo htmlspecialchars($caption); ?></div>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+        <?php endforeach; ?>
+
+        </div>
+
+        <?php endif; ?>
+    </div>
+</main>
+
+<?php include 'inc/footer.php'; ?>
