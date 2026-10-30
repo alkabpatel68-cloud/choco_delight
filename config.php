@@ -1,50 +1,115 @@
 <?php
-// config.php
+/***********************************
+ * DATABASE CONFIG
+ ***********************************/
+define('DB_HOST', 'localhost');
+define('DB_USER', 'root');
+define('DB_PASS', '');
+define('DB_NAME', 'choco_delight');
 
-// Start session only if not already started
-if (session_status() == PHP_SESSION_NONE) {
+/***********************************
+ * DATABASE CONNECTION
+ ***********************************/
+function getDBConnection() {
+    $conn = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
+
+    if ($conn->connect_error) {
+        die("Database Connection Failed: " . $conn->connect_error);
+    }
+
+    $conn->set_charset("utf8mb4");
+    return $conn;
+}
+
+/***********************************
+ * SESSION START
+ ***********************************/
+if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-define('DB_HOST', 'localhost');
-define('DB_USER', 'root');
-define('DB_PASS', ''); // set your DB password
-define('DB_NAME', 'choco_delight');
-
-$mysqli = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
-if ($mysqli->connect_errno) {
-    die("DB Connect failed: " . $mysqli->connect_error);
+/***********************************
+ * AUTH HELPERS
+ ***********************************/
+function isDeliveryLoggedIn() {
+    return isset($_SESSION['delivery_id']) && !empty($_SESSION['delivery_id']);
 }
-$mysqli->set_charset('utf8mb4');
 
-// Simple function to escape output
-if (!function_exists('e')) {
-    function e($string) {
-        return htmlspecialchars($string, ENT_QUOTES, 'UTF-8');
+function requireDeliveryLogin() {
+    if (!isDeliveryLoggedIn()) {
+        header('Location: delivery_login.php');
+        exit();
     }
 }
 
-// Require login for protected pages
-function require_login() {
-    if (!isset($_SESSION['admin_id'])) {
-        header('Location: login.php');
-        exit;
-    }
+function deliveryLogout() {
+    session_unset();
+    session_destroy();
+    header('Location: delivery_login.php');
+    exit();
 }
 
-// Create default admin if none exists (convenience)
-function ensure_default_admin($mysqli) {
-    $res = $mysqli->query("SELECT id FROM admins LIMIT 1");
-    if (!$res || $res->num_rows == 0) {
-        $pass = password_hash('password', PASSWORD_DEFAULT);
-        $stmt = $mysqli->prepare("INSERT INTO admins (username,password,name,email) VALUES (?,?,?,?)");
-        $user = 'admin';
-        $name = 'Choco Admin';
-        $email = 'admin@choco.local';
-        $stmt->bind_param('ssss', $user, $pass, $name, $email);
-        $stmt->execute();
-        $stmt->close();
+/***********************************
+ * DELIVERY PERSON INFO
+ ***********************************/
+function getDeliveryPersonInfo() {
+    if (!isDeliveryLoggedIn()) {
+        return null;
     }
+
+    $conn = getDBConnection();
+    $id = (int)$_SESSION['delivery_id'];
+
+    $stmt = $conn->prepare("
+        SELECT id, name, email, phone, status 
+        FROM users 
+        WHERE id = ? AND user_type = 'delivery'
+        LIMIT 1
+    ");
+    $stmt->bind_param("i", $id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $info = $result->fetch_assoc();
+
+    $stmt->close();
+    $conn->close();
+
+    return $info;
 }
-ensure_default_admin($mysqli);
-?>
+
+/***********************************
+ * HELPERS
+ ***********************************/
+function formatCurrency($amount) {
+    return '₹' . number_format((float)$amount, 2);
+}
+
+function formatDate($date) {
+    return empty($date) ? 'N/A' : date('M d, Y h:i A', strtotime($date));
+}
+
+function formatDateShort($date) {
+    return empty($date) ? 'N/A' : date('M d, Y', strtotime($date));
+}
+
+function getStatusClass($status) {
+    return [
+        'pending' => 'warning',
+        'processing' => 'info',
+        'confirmed' => 'info',
+        'out_for_delivery' => 'primary',
+        'delivered' => 'success',
+        'cancelled' => 'danger',
+        'returned' => 'danger'
+    ][$status] ?? 'secondary';
+}
+
+function getPaymentStatusClass($status) {
+    return [
+        'pending' => 'warning',
+        'paid' => 'success',
+        'cod' => 'info',
+        'failed' => 'danger',
+        'refunded' => 'secondary'
+    ][$status] ?? 'secondary';
+}
